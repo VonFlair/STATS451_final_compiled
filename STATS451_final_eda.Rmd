@@ -1,0 +1,180 @@
+---
+title: "STATS_451_final_eda"
+author: "Sirui Chen, Yingxi Chen, Jiayu Feng, Qiyun Teng"
+date: "2024-04-15"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(readr)
+library(ggplot2)
+library(rstan)
+library(bayesplot)
+library(coda)
+```
+
+
+
+## Data Cleaning & Encoding
+```{r}
+data <- read.csv("C:\\Users\\22840\\Desktop\\umich winter 2024\\STATS 451\\STATS451_final_project\\data\\Fuel_mi_csv.csv")
+filtered_data <- data %>% filter(Methane.emissions != 0)
+```
+
+```{r}
+selected_data = filtered_data %>% dplyr::select(Year,Sector, Fuel.Type,Methane.emissions, Industry.Type)
+combined = data %>% filter(Sector %in% c("Chemicals","Metals", "Minerals"
+                                                      ,"Other", "Petroleum and Natural Gas Systems","Power Plants"
+                                                      ,"Pulp and Paper","Waste"))
+combined %>% head()
+```
+
+
+
+
+```{r}
+sector_count <- combined %>%
+  count(Sector) %>%
+  mutate(Percentage = n / sum(n) * 100)
+
+sector_count
+# find largest percentage
+max_percentage <- max(sector_count$Percentage)
+max_percentage <- max(sector_count$Percentage)
+
+# pie chart
+ggplot(sector_count, aes(x = "", y = n, fill = Sector)) +
+  geom_bar(stat = "identity", width = 1) +
+  coord_polar(theta = "y") + 
+  labs(fill = "Sector", y = "Count", x = "") +
+  theme_void() + 
+  geom_text(aes(label = ifelse(Percentage == max_percentage, paste0(round(Percentage, 1), "%"), "")),
+            position = position_stack(vjust = 0.5)) 
+
+print(ggplot)
+```
+```{r}
+selected_data = filtered_data %>% dplyr::select(Year,Sector, Fuel.Type,Methane.emissions, Industry.Type)
+combined_data = selected_data %>% filter(Sector %in% c("Power Plants"))
+df = combined_data %>% select(Year, Fuel.Type,Methane.emissions, Industry.Type)
+df %>% head()
+```
+
+
+
+
+## Data Visualization
+
+
+```{r}
+ggplot(df, aes(x=Year, y=Methane.emissions, color=Industry.Type)) +
+  geom_jitter(width=0.2) + # Use jitter to avoid overplotting if you have discrete x values
+  labs(x = "Year", y = "Methane Emissions", color = "Industry Type") +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1")
+
+```
+
+```{r}
+# Calculate the IQR for Methane Emissions
+Q1 <- quantile(df$Methane.emissions, 0.25)
+Q3 <- quantile(df$Methane.emissions, 0.75)
+IQR <- Q3 - Q1
+
+# Define the bounds for what constitutes an outlier
+lower_bound <- Q1 - 2 * IQR
+upper_bound <- 1000
+
+# Remove outliers from the dataset
+df_filtered <- df %>%
+  filter(Methane.emissions >= lower_bound & Methane.emissions <= upper_bound)
+
+# Create the plot without outliers
+ggplot(df_filtered, aes(x=Year, y=Methane.emissions, color=Industry.Type)) +
+  geom_jitter(width=0.2) + 
+  labs(x = "Year", y = "Methane Emissions", color = "Industry Type") +
+  theme_minimal() +
+  scale_color_brewer(palette = "Set1")
+```
+
+```{r}
+ggplot(df_filtered, aes(x=Industry.Type, y=Methane.emissions, fill=as.factor(Fuel.Type))) +
+  geom_boxplot() + 
+  labs(x = "Industry Type", y = "Methane Emissions", fill = "Fuel Type") + 
+  theme_minimal() + 
+  scale_fill_brewer(palette = "Set1") + 
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) 
+
+
+print(ggplot)
+```
+
+
+```{r}
+# Generate the counts table
+counts_table <- df %>%
+  count(Industry.Type, Fuel.Type)
+counts_table
+
+# Generate the scatter plot to show frequency of occurrences
+ggplot(counts_table, aes(x = Fuel.Type, y = Industry.Type, size = n, color = n)) +
+  geom_point(alpha = 0.7) +
+  scale_color_gradient(low = "lightblue", high = "darkblue") + 
+  scale_size_continuous(range = c(2, 20)) + 
+  labs(title = 'Scatter Plot with Encoded Categorical Data',
+       subtitle = 'Frequency of Occurrences between Fuel Type and Industry Type',
+       x = 'Fuel Type',
+       y = 'Industry Type') +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = 'right')
+
+
+```
+
+
+
+
+
+```{r}
+ggplot(df, aes(x = Fuel.Type, fill = Fuel.Type)) +
+  geom_bar() + 
+  labs(title = "Frequency of Different Fuel Types", x = "Fuel Type", y = "Count") +
+  theme_minimal()
+
+```
+
+
+```{r}
+
+library(ggplot2)
+library(dplyr)
+
+# Aggregation of the total methane emissions by Year and the Fuel Type
+emissions_by_year_fuel <- df %>%
+  group_by(Year, Fuel.Type) %>%
+  summarise(Total_Emissions = sum(Methane.emissions), .groups = 'drop')
+
+# plot line chart
+ggplot(emissions_by_year_fuel, aes(x = Year, y = Total_Emissions, group = Fuel.Type, color = Fuel.Type)) +
+  geom_line() +
+  geom_point() +
+  scale_x_continuous(breaks = seq(min(emissions_by_year_fuel$Year), max(emissions_by_year_fuel$Year), by = 1)) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5)) +
+  labs(title = 'Total Emissions by Year and Fuel Type',
+       x = 'Year', y = 'Total Emissions', color = 'Fuel Type')
+
+```
+
+
+
+
+

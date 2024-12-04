@@ -1,0 +1,217 @@
+---
+title: "STATS 451 Final Report Code"
+author: "Yingxi Chen, Jiayu Feng, Qiyun Teng, Sirui Chen"
+fig_width: 6 
+fig_height: 6 
+date: "2024-04-15"
+output:
+  pdf_document: default
+  html_document: default
+---
+## Settings
+```{r,message=FALSE,warning=FALSE}
+library(bayesplot)
+library(coda)
+library(ggplot2)
+library(invgamma)
+library(readr)
+library(rstan)
+library(rstanarm)
+library(tidyverse)
+
+```
+
+```{r setup}
+knitr::opts_chunk$set(echo = FALSE)
+```
+
+```{r,message=FALSE}
+rstan_options(auto_write = TRUE)
+options(mc.cores = parallel::detectCores())
+```
+
+
+## Data Cleaning & Encoding
+```{r}
+data <- read.csv("~/Desktop/Fuel_mi_csv.csv")
+filtered_data <- data %>% filter(Methane.emissions != 0)
+```
+
+```{r}
+selected_data = filtered_data %>% dplyr::select(Year,Sector, Fuel.Type,Methane.emissions, Industry.Type)
+combined_data = selected_data %>% filter(Sector %in% c("Chemicals","Metals", "Minerals" ,"Other", "Petroleum and Natural Gas Systems","Power Plants" ,"Pulp and Paper","Waste"))
+```
+```{r}
+df = combined_data %>% filter(Sector %in% c("Power Plants"))
+df %>% head()
+```
+
+
+
+```{r}
+# Encoding
+df <- df %>%
+  mutate(FuelType = case_when(
+    Fuel.Type == "Coal"                ~ 4,
+    Fuel.Type == "Natural Gas"         ~ 3,
+    Fuel.Type == "Other"               ~ 2,
+    Fuel.Type == "Petroleum Products"  ~ 1,
+    TRUE                               ~ NA_integer_  
+  ))
+df <- df %>%
+  mutate(IndustryType = case_when(
+  Industry.Type == "C,D"                ~ 2,
+    Industry.Type == "C"         ~ 3,
+    Industry.Type == "D"               ~ 1,
+    TRUE                               ~ NA_integer_  
+  ))
+year_mean <- mean(df$Year)
+year_sd <- sd(df$Year)
+
+# Standazing Year
+df$Year <- (df$Year - mean(df$Year)) / year_sd
+  
+
+```
+```{r}
+head(df)
+```
+
+
+
+
+
+
+## Model Building
+```{r}
+# stan data
+stan_data <- list(
+  N = nrow(df),
+  Year = df$Year,
+  FuelType = df$FuelType,
+  IndustryType = df$IndustryType,
+  MethaneEmissions = df$Methane.emissions
+)
+```
+
+
+
+
+```{r}
+stan_code <- 
+"
+data {
+  int<lower=0> N;  // Number of observations
+  real Year[N];    // Array of reals for Year, used directly
+  int<lower=1> FuelType[N];
+  int<lower=1> IndustryType[N];
+  vector[N] MethaneEmissions;
+}
+transformed data {
+  vector[N] log_MethaneEmissions = log(MethaneEmissions);
+  vector[N] v_Year = to_vector(Year);
+  vector[N] scaled_FuelType = to_vector(FuelType) - mean(to_vector(FuelType)); 
+  vector[N] scaled_IndustryType = to_vector(IndustryType) - mean(to_vector(IndustryType));  
+}
+parameters {
+  real alpha;  // Intercept
+  real beta1;  // Coefficient for scaled Year
+  real beta2;  // Coefficient for scaled FuelType
+  real beta3;  // Coefficient for scaled IndustryType
+  real<lower=0> sigma;  // Standard deviation of emissions
+}
+model {
+  // Priors
+  alpha ~ normal(0, 1);
+  beta1 ~ normal(0, 1);  
+  beta2 ~ normal(0, 1);
+  beta3 ~ normal(0, 1);
+  sigma ~ inv_gamma(0.5, 10);
+
+  log_MethaneEmissions ~ normal(alpha + beta1 * v_Year  +
+                            beta2 * scaled_FuelType + beta3 * scaled_IndustryType, sigma);
+}
+
+"
+```
+
+```{r,echo=TRUE, results='hide'}
+stan_model <- stan_model(model_code = stan_code)
+fit <- sampling(stan_model, data = stan_data, iter = 2000, chains = 4)
+print(fit)
+```
+
+```{r}
+library(invgamma)
+library(rstan)
+sigma_samples <- rstan::extract(fit)$sigma
+ggplot(data = data.frame(sigma = sigma_samples), aes(x = sigma)) +
+  geom_histogram(bins = 30, fill = "blue", color = "black") +
+  ggtitle("Distribution of Sigma") +
+  xlab("Sigma Values") +
+  ylab("Frequency")
+
+s <- seq(0, 5, .01)
+plot(s, dinvgamma(s,shape = 0.5,scale = 10), type = 'l')
+```
+
+## Sensitivity Test
+
+```{r,warning=FALSE,eval=FALSE}
+run_sensitivity_analysis <- function(sd_prior) {
+  alt_stan_code <- gsub("normal\\(0, 1\\)", sprintf("normal(0, %f)", sd_prior), stan_code)
+  alt_stan_model <- stan_model(model_code = alt_stan_code)
+  alt_fit <- sampling(alt_stan_model, data = stan_data, iter = 2000, chains = 4)
+  
+  return(summary(alt_fit)$summary[c("beta1", "beta2", "beta3"),])
+}
+sd_values <- c(0.5, 1, 2)
+sensitivity_results <- lapply(sd_values, run_sensitivity_analysis)
+sensitivity_comparison <- do.call(rbind, sensitivity_results)
+```
+
+
+```{r}
+results_sd_05 <- data.frame(sd = 0.5, parameter = c("beta1", "beta2", "beta3"), 
+                            mean = c(0.03574926, 1.73641431, 0.93010417), 
+                            lower = c(-0.05973073, 1.62944409, 0.73000725), 
+                            upper = c(0.1306606, 1.8416303, 1.1246476))
+
+results_sd_1 <- data.frame(sd = 1, parameter = c("beta1.1", "beta2.1", "beta3.1"), 
+                           mean = c(0.03590249, 1.75075456, 0.95403037), 
+                           lower = c(-0.05935157, 1.64481966, 0.75210733), 
+                           upper = c(0.1335380, 1.8542811, 1.1528076))
+
+results_sd_2 <- data.frame(sd = 2, parameter = c("beta1.2", "beta2.2", "beta3.2"), 
+                           mean = c(0.03657837, 1.75527631, 0.96433876), 
+                           lower = c(-0.05736638, 1.65354958, 0.76009357), 
+                           upper = c(0.1333934, 1.8556585, 1.1635471))
+
+combined_results <- rbind(results_sd_05, results_sd_1, results_sd_2)
+print(combined_results)
+```
+
+
+## Inference
+```{r, fig.height=6,fig.width=4}
+# Trace plots
+mcmc_trace(fit, pars = c("alpha", "beta1", "beta2", "beta3", "sigma"))
+
+# Density plots
+mcmc_dens(fit, pars = c("alpha", "beta1", "beta2", "beta3", "sigma"))
+
+# Interval plots
+mcmc_intervals(fit, pars = c( "beta1", "beta2", "beta3"))
+
+# Autocorrelation plots
+mcmc_acf(fit, pars = c("alpha", "beta1", "beta2", "beta3", "sigma"))
+
+# Area plots
+mcmc_areas(fit, pars = c("alpha", "beta1", "beta2", "beta3", "sigma"))
+
+# Pair plots
+mcmc_pairs(fit, pars = c("alpha", "beta1", "beta2", "beta3", "sigma"))
+
+# Rank histograms
+mcmc_rank_hist(fit, pars = c("alpha", "beta1", "beta2", "beta3", "sigma"))
+```
